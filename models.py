@@ -141,12 +141,14 @@ class Discriminator(ReptileModel):
         ds_size = 32 // 2 ** 4
         self.adv_layer = nn.Linear(128 * ds_size ** 2, 1)
 
-    def forward(self, img):
+    def forward(self, img, KD=False):
         out = self.model(img)
         out = out.view(out.shape[0], -1)
         validity = self.adv_layer(out)
-
+        if KD:
+            return validity, out
         return validity
+
 
     def clone(self):
         clone = Discriminator().cuda()

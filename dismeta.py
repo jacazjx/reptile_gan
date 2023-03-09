@@ -1,10 +1,12 @@
 import argparse
 import math
 
+import numpy as np
 import torch
 from torch.utils.data import WeightedRandomSampler, DataLoader
 from torch import optim
 from utils import SerializationTool, make_infinite
+from logger import Logger
 # Parsing
 parser = argparse.ArgumentParser('Train reptile on omniglot')
 
@@ -50,6 +52,7 @@ class AbstractTrainer(object):
         self.opti_d = optim.Adam(params=self.discriminator.parameters(), lr=args.lr)
         self.opti_g = optim.Adam(params=self.generator.parameters(), lr=args.lr)
         self.loss = torch.nn.BCEWithLogitsLoss()
+        self.logger = Logger("log", )
 
     def train(self, *args, **kwargs):
         if self.args.meta:
@@ -71,10 +74,12 @@ class twin(AbstractTrainer):
         self.meta_g = self.generator.clone()
         self.meta_opti_g = optim.SGD(self.meta_g.parameters(),  lr=args.meta_lr)
         self.cache = []
+        self.share_cache = None
         self.A = torch.zeros(args.N).fill_(1 / (args.N - 1))
         self.A[idx] = 0
 
     def train(self, t):
+        self.share_cache = None
         super().train()
         if t % int((self.num_samples * self.args.m) / self.args.batch) == 0:
             num_choose = int(math.log(self.args.N, 2))
@@ -82,8 +87,14 @@ class twin(AbstractTrainer):
         return []
 
     def share_data(self):
+        if self.share_cache is not None:
+            return self.share_cache
+
         if self.args.shareway == "kd":
-            pass
+            z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
+            x = self.generator(z)
+            y, kn = self.discriminator(x, True)
+            self.share_cache = (z, x, kn, y)
 
         elif self.args.shareway == "idea":
             pass
@@ -91,15 +102,28 @@ class twin(AbstractTrainer):
         elif self.args.shareway == "fl":
             pass
 
+        return self.share_cache
+
     def inner_loop(self):
-        pass
+        z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
+        x_g = self.meta_g(z)
+        x = x_g
+        loss = self.loss(self.discriminator(x), self.g_targets)
+        loss.backward()
+        self.meta_opti_g.step()
+        return loss.item()
 
     def meta_training_loop(self):
         self.generator.train()
         self.discriminator.eval()
 
         for i in range(self.args.meta_epochs):
-            d_loss, g_loss = self.inner_loop()
+            g_loss = self.inner_loop()
+
+    def fine_tuning(self,):
+        while len(self.cache) > 0:
+            kd = self.cache.pop()
+
         pass
 
     def sync(self, para):
@@ -116,12 +140,15 @@ class client(AbstractTrainer):
         self.meta_opti_d = optim.SGD(self.meta_d.parameters(), lr=args.meta_lr)
         self.cache = []
 
-
     def inner_loop(self, x_r):
-        z = torch.randn((x_r.shape[0], 100)).to(device)
+        z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
         x_g = self.generator(z)
-
-        pass
+        x_r = x_r.to(device)
+        x = torch.cat(x_r, x_g)
+        loss = self.loss(self.meta_d(x), self.d_targets)
+        loss.backward()
+        self.meta_opti_d.step()
+        return loss.item()
 
     def validate_run(self):
         pass
@@ -134,8 +161,8 @@ class client(AbstractTrainer):
 
         self.meta_d.load_state_dict(self.discriminator.state_dict())
         for i in range(self.args.meta_epochs):
-            d_loss, g_loss = self.inner_loop(batch)
-        pass
+            d_loss = self.inner_loop(batch)
+
 
     def checkpoint_step(self):
         pass
@@ -163,15 +190,17 @@ def main_loop():
         for i in range(args.N):
             chosen = twins[i].train(t)
             for ch in chosen:
+                twins[ch].cache.append(twins[i].share_data())
 
-
+        for i in range(args.N):
+            twins[i].fine_tuning()
 
     def sync_para(srcs, dests):
         for src, dest in zip(srcs, dests):
             src.sync(dest.state_dict())
 
-    for t in range(args.T):
 
+    for t in range(args.T):
         client_train_step()
         sync_para(clients, twins)
         twin_train_step(t)

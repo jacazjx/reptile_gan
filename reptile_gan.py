@@ -17,7 +17,7 @@ state_g = None
 state_d = None
 N = 1
 K = 10
-cross_entropy = nn.MSELoss().cuda()
+cross_entropy = nn.BCEWithLogitsLoss().cuda()
 fid_tool = InceptionV3()
 
 
@@ -120,7 +120,7 @@ meta_d = Discriminator().cuda()
 meta_optimizer_g = torch.optim.SGD(meta_g.parameters(), lr=meta_lr)
 meta_optimizer_d = torch.optim.SGD(meta_d.parameters(), lr=meta_lr)
 
-van_dset = make_infinite(DataLoader(dset.copy(), batch_size=10, shuffle=True))
+van_dset = make_infinite(DataLoader(dset.copy(), batch_size=20, shuffle=True))
 van_g = Generator().cuda()
 van_d = Discriminator().cuda()
 van_optimizer_d = torch.optim.Adam(van_d.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -139,7 +139,7 @@ for outer_loop in range(outer_loops):
     net_d = meta_d.clone()
     optimizer_d = get_optimizer(net_d, state_d)
 
-    task = make_infinite(DataLoader(dset.get_random_train_task(N * K), batch_size=10, shuffle=True))
+    task = make_infinite(DataLoader(dset.get_random_train_task(N * K), batch_size=K, shuffle=True))
 
     do_learning(net_g, net_d, optimizer_g, optimizer_d, task, inner_loop)
     state_g = optimizer_g.state_dict()  # save optimizer state
@@ -189,9 +189,9 @@ for outer_loop in range(outer_loops):
         z = Tensor(np.random.normal(0, 1, (500, 100)))
         meta_x = meta_g(z)
         loss = meta_d(meta_x)
-        # save_fig(meta_x.cpu(), "meta")
+        save_fig(meta_x.cpu(), "meta")
         van_x = van_g(z)
-        # save_fig(van_x.cpu(), "van")
+        save_fig(van_x.cpu(), "van")
 
 
         # fid_meta = calcu_fid(real_img, meta_x, fid_tool)
