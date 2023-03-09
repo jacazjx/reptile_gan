@@ -97,8 +97,8 @@ class MNISTTasks:
         return few_shot
 
 
-    def get_random_task(self, k_shot):
-        class_indices = np.random.choice(np.unique(self.train_targets), size=1, replace=False)
+    def get_random_task(self, n_way, k_shot):
+        class_indices = np.random.choice(np.unique(self.train_targets), size=n_way, replace=False)
         task_data, task_targets = [], []
 
         for class_idx in class_indices:

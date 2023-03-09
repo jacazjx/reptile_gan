@@ -77,7 +77,9 @@ For 5-way 1-shot (blue curve):
 python train_omniglot.py log/o51 --classes 5 --shots 1 --train-shots 12 --meta-iterations 200000 --iterations 12 --test-iterations 86 --batch 10 --meta-lr 0.33 --lr 0.00044
 ```
 
-
+```bash
+python dismeta.py -T 10000 -N 1 --model lsgan --dataset femnist --shareway kd --meta_epochs 5 --batch 10
+```
 
 
 ## References

@@ -2,7 +2,7 @@ import logging
 import os
 
 class Logger:
-    def __init__(self, log_dir, log_level=logging.INFO):
+    def __init__(self, log_dir, id_string, log_level=logging.INFO):
         '''
                 log_dir : 日志保存地址
                 log_level: 日志类型
@@ -19,7 +19,7 @@ class Logger:
         # Create a file handler
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
-        log_file = os.path.join(log_dir, 'log.txt')
+        log_file = os.path.join(log_dir, f'log_{id_string}.txt')
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)

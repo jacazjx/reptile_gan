@@ -179,6 +179,16 @@ def reptile_sine(model, iterations, lr_inner=0.01,
             print('AvgTestML ', np.mean(test_metalosses))
 
 
-model = SineModel()
-reptile_sine(model, iterations=100000)
+# model = SineModel()
+# reptile_sine(model, iterations=100000)
+from utils import kl_loss
+a = torch.randn((5, 10))
+b = torch.randn((5, 10))
+
+print(kl_loss(a, b))
+s = 0
+for aa, bb in  zip(a, b):
+    s += kl_loss(aa, bb)
+print(s)
+
 

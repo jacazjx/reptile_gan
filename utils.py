@@ -1,7 +1,7 @@
 import os
 import re
 import torch
-
+import torch.nn.functional as F
 def cal_projection(u, v):
     res = []
     for t1, t2 in zip(u, v):
@@ -83,6 +83,16 @@ def list_files(root, suffix, prefix=False):
 
     return files
 
+def wassertein_loss(inputs, targets):
+    return torch.mean(inputs * targets)
+
+def kl_loss(src, dest):
+    log_probs = torch.nn.functional.log_softmax(src, dim=-1)
+    probs = torch.softmax(dest, dim=-1)
+
+    kl_distances = F.kl_div(log_probs, probs, reduction='none')
+    return kl_distances
+
 
 def find_latest_file(folder):
     files = []
@@ -155,6 +165,14 @@ class SerializationTool(object):
 
 
 if __name__ == '__main__':
+    a = torch.randn((5, 128))
+    b = torch.randn((5, 128))
+
+    print(kl_loss(a, b))
+    s = 0
+    for aa, bb in zip(a, b):
+        s += kl_loss(aa.view(1, aa.shape[0]), bb.view(1, bb.shape[0]))
+    print(s)
 
     u = torch.randn([5, 128])
     v = torch.randn([5, 128])

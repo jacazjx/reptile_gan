@@ -51,8 +51,8 @@ class FEMNIST:
 
 class SingleDataset:
     def __init__(self, train, num_samples, test):
-        self.samples = train['x']
-        self.labels = train['y']
+        self.samples = np.array(train['x'])
+        self.labels = np.array(train['y'])
         self.num_samples = num_samples
         self.test = test
 
@@ -71,7 +71,7 @@ class SingleDataset:
         for class_idx in class_indices:
             # Select samples for this class
             class_data = self.samples[self.labels == class_idx]
-            indices = np.random.choice(len(class_data), size=k_shot, replace=False)
+            indices = np.random.choice(len(class_data), size=k_shot, replace=True)
             task_data.append(class_data[indices])
             task_targets.extend([class_idx] * k_shot)
 
@@ -101,14 +101,14 @@ class FewShot(data.Dataset):
         sample = self.samples[idx]
         target = self.targets[idx]
 
-        image = Image.fromarray(sample.numpy(), mode='L')
+        image = Image.fromarray(sample.view(28, 28).numpy(), mode='L')
 
         image = self.transform(image)
         return image, target
 
 
 if __name__ == '__main__':
-    dataset = FEMNIST("data", 10, "iid")
+    dataset = FEMNIST("data", 1, "iid")
     user_1 = dataset[0]
 
     task = user_1.get_random_task(10, 10)
