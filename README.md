@@ -65,21 +65,20 @@ for `meta-batch=1`.
 <img src="https://github.com/gabrielhuang/reptile-pytorch/raw/master/plots/omniglot_train.png" width="400">
 <img src="https://github.com/gabrielhuang/reptile-pytorch/raw/master/plots/omniglot_val.png" width="400">
 
-For 5-way 5-shot (red curve):
+## MNIST
 
+MDGAN 1-Inner_Loop Conditional GAN under IID and NonIID
 ```bash
-python train_omniglot.py log/o55 --classes 5 --shots 5 --train-shots 10 --meta-iterations 100000 --iterations 5 --test-iterations 50 --batch 10 --meta-lr 0.2 --lr 0.001
+python md_fe_gan.py --model mdgan -N 10 --meta_epochs 1  --check_every 100 --condition
+python md_fe_gan.py --model mdgan -N 10 --niid --meta_epochs 1  --check_every 100 --condition
 ```
 
-For 5-way 1-shot (blue curve):
-
+TwinGAN 5-Task, 4-Mini_batch, 5-Inner_Loop  
 ```bash
-python train_omniglot.py log/o51 --classes 5 --shots 1 --train-shots 12 --meta-iterations 200000 --iterations 12 --test-iterations 86 --batch 10 --meta-lr 0.33 --lr 0.00044
+python dismeta.py -N 10 --num_tasks 5 --meta_epochs 5 --batch 20  --check_every 100 --condition --meta
 ```
 
-```bash
-python dismeta.py -T 10000 -N 1 --model lsgan --dataset femnist --shareway kd --meta_epochs 5 --batch 10
-```
+## EMNIST
 
 
 ## References
