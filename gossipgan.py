@@ -98,7 +98,8 @@ class Client(AbstractTrainer):
         d_loss, g_loss, d_grad, g_grad = 0, 0, 0, 0
         meta_d, meta_g = SerializationTool.serialize_model(self.discriminator), SerializationTool.serialize_model(
             self.generator)
-        meta_grad = []
+        meta_grad_d = 0
+        meta_grad_g = 0
         for i in range(self.args.num_tasks):
             SerializationTool.deserialize_model(self.discriminator, meta_d)
             SerializationTool.deserialize_model(self.generator, meta_g)
@@ -111,12 +112,19 @@ class Client(AbstractTrainer):
             g_loss += loss[1]
             d_grad += loss[2]
             g_grad += loss[3]
-            meta_grad.append((SerializationTool.serialize_model(self.generator) - meta_g,
-                              SerializationTool.serialize_model(self.discriminator) - meta_d))
-
+            meta_grad_d += (SerializationTool.serialize_model(self.discriminator) - meta_d)
+            meta_grad_g += (SerializationTool.serialize_model(self.generator) - meta_g)
+        meta_grad_d /= self.args.num_tasks
+        meta_grad_g /= self.args.num_tasks
+        SerializationTool.deserialize_model(self.discriminator, meta_d)
+        SerializationTool.deserialize_model(self.generator, meta_g)
+        SerializationTool.deserialize_model(self.discriminator, meta_grad_d, position="grad")
+        SerializationTool.deserialize_model(self.generator, meta_grad_g, position="grad")
+        self.opti_g.step()
+        self.opti_d.step()
         logger.info(f"EPOCHS: [{self.eps}/{self.args.T}]; [{self.id_string}]; "
                     f"D_Loss: {d_loss / self.args.meta_epochs}; G_loss: {g_loss / self.args.meta_epochs}; "
-                    f"D_Grad: {d_grad / self.args.meta_epochs}; G_grad: {g_grad / self.args.meta_epochs}")
+                    f"D_Grad: {meta_grad_d.norm().item()}; G_grad: {meta_grad_g.norm().item()}")
 
     def base_training_loop(self):
         self.excu_cache()
