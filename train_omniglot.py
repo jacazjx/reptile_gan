@@ -11,7 +11,7 @@ from torchvision import transforms
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from models import OmniglotModel
+
 from omniglot import MetaOmniglotFolder, split_omniglot, ImageCache, transform_image, transform_label
 from utils import find_latest_file
 
@@ -98,7 +98,7 @@ logger = SummaryWriter(run_dir)
 
 # Load data
 # Resize is done by the MetaDataset because the result can be easily cached
-omniglot = MetaOmniglotFolder(args.input, size=(28, 28), cache=ImageCache(),
+omniglot = MetaOmniglotFolder("data/FIGR-8/Data", size=(28, 28), cache=ImageCache(),
                               transform_image=transform_image,
                               transform_label=transform_label)
 meta_train, meta_test = split_omniglot(omniglot, args.validation)

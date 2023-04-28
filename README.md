@@ -1,4 +1,4 @@
-# Reptile
+# TwinGAN: 
 
 PyTorch implementation of OpenAI's Reptile algorithm for supervised learning.
 
@@ -16,15 +16,9 @@ and various utilities to split meta-training sets as well as base-tasks.
 
 ## Features
 
-- [x] Monitor training with TensorboardX.
-- [x] Interrupt and resume training. 
-- [x] Train and evaluate on Omniglot.
-- [ ] Meta-batch size > 1.
-- [ ] Train and evaluate on Mini-Imagenet.
-- [ ] Clarify Transductive vs. Non-transductive setting.
-- [ ] Add training curves in README.
-- [ ] Reproduce all settings from OpenAI's code.
-- [ ] Shell script to download datasets
+- [x] Peer-to-Peer Federated Learning.
+- [x] Meta Learning for Generator. 
+- [x] Knowledge Distillition for Fine-tuning .
 
 ## How to train on Omniglot
 
@@ -67,19 +61,37 @@ for `meta-batch=1`.
 
 ## MNIST
 
+FeGAN
+```bash
+python md_fe_gan.py --model fegan -N 10 --check_every 100
+```
+
 MDGAN 1-Inner_Loop Conditional GAN under IID and NonIID
 ```bash
-python md_fe_gan.py --model mdgan -N 10 --meta_epochs 1  --check_every 100 --condition
-python md_fe_gan.py --model mdgan -N 10 --niid --meta_epochs 1  --check_every 100 --condition
+python md_fe_gan.py --model mdgan -N 10 --meta_epochs 1  --check_every 100 
 ```
 
 TwinGAN 5-Task, 4-Mini_batch, 5-Inner_Loop  
 ```bash
-python dismeta.py -N 10 --num_tasks 5 --meta_epochs 5 --batch 20  --check_every 100 --condition --meta
+python dismeta.py -N 10 --num_tasks 5 --meta_epochs 5 --batch 20  --check_every 100 --condition --meta --ln
 ```
 
 ## EMNIST
 
+FeGAN
+```bash
+python md_fe_gan.py --model fegan -N 10 --dataset emnist --niid  --check_every 500
+```
+
+MDGAN 1-Inner_Loop Conditional GAN under NonIID
+```bash
+python md_fe_gan.py --model mdgan -N 10 --dataset emnist --niid --meta_epochs 1
+```
+
+TwinGAN 5-Task, 4-Mini_batch, 5-Inner_Loop
+```bash
+python dismeta.py -N 10 --num_tasks 5 --dataset emnist --niid --meta_epochs 5 --batch 20  --check_every 100 --condition --meta --ln
+```
 
 ## References
 

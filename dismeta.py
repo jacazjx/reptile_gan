@@ -1,6 +1,11 @@
 import argparse
 import math
 import os
+from collections import Counter
+import random
+
+import matplotlib.pyplot as plt
+import numpy as np
 from datasets.EMNIST import EMNIST
 import numpy as np
 import torch
@@ -14,7 +19,7 @@ from utils import SerializationTool, make_infinite, wassertein_loss, l2_regulari
 from logger import Logger
 import pickle as pkl
 import concurrent.futures
-
+import traceback
 
 # Parsing
 parser = argparse.ArgumentParser('Train reptile on omniglot')
@@ -30,6 +35,7 @@ parser.add_argument('--model', default="twingan", type=str, choices=["fegan", "m
 parser.add_argument('--dataset', default="mnist", type=str, choices=["emnist", "mnist"], help='num of client')
 parser.add_argument('--meta', dest="meta_arg", action="store_true", default=False, help="whether use meta learning")
 parser.add_argument('--niid', dest="noniid", action="store_true", default=False, help="whether use non-iid")
+parser.add_argument('--ln', dest="layer_norm", action="store_true", default=False, help="whether use layer_norm")
 parser.add_argument('--feature', dest="feature_extra", action="store_true", default=False,
                     help="whether use feature extra")
 parser.add_argument('--condition', dest="cond", action="store_true", default=False, help="whether use condition")
@@ -41,7 +47,10 @@ parser.add_argument('--test_iterations', default=50, type=int, help='number of b
 parser.add_argument('--batch', default=20, type=int, help='minibatch size in base task')
 parser.add_argument('--meta-lr', default=1e-4, type=float, help='meta learning rate')
 parser.add_argument('--lr', default=0.0002, type=float, help='base learning rate')
-parser.add_argument('--m', default=1, type=int, help='base learning rate')
+parser.add_argument('--m', default=1, type=int, help='')
+parser.add_argument('--Lambda', default=0.01, type=float, help='regularition')
+parser.add_argument('--S', default=20, type=int, help='when to share')
+parser.add_argument('--R', default=5000, type=int, help='when to change the strategy')
 
 # - General params
 parser.add_argument('--validation', default=0.1, type=float, help='Percentage of validation')
@@ -54,9 +63,9 @@ parser.add_argument('--checkpoint', default='checkpoint',
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 args = parser.parse_args()
-id_string = f"[ModelName:{args.model}]_[NumClient:{args.N}]_[Dataset:{args.dataset}]_[NumTask:{args.num_tasks}]_" \
-            f"[IsNonIID:{args.noniid}]_[IsCondition:{args.cond}]_[IsFeatureExtra:{args.feature_extra}]_" \
-            f"[ShareWay:{args.shareway}]_[NumInnerLoop:{args.meta_epochs}]_[Batch:{args.batch}]"
+id_string = f"[ModelName={args.model}]_[NumClient={args.N}]_[Dataset={args.dataset}]_[NumTask={args.num_tasks}]_" \
+            f"[IsNonIID={args.noniid}]_[IsCondition={args.cond}]_[IsLayerNrom{args.layer_norm}]_[IsFeatureExtra={args.feature_extra}]_" \
+            f"[ShareWay={args.shareway}]_[NumInnerLoop={args.meta_epochs}]_[Batch={args.batch}]"
 log_dir = f"./{args.checkpoint}/{id_string}/"
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
@@ -75,14 +84,15 @@ np.random.seed(2023)
 torch.manual_seed(2023)
 torch.cuda.manual_seed(2023)
 
+
 class AbstractTrainer(object):
     def __init__(self, args, idx):
         self.idx = idx
         self.args = args
         self.id_string = f"{idx}"
         from models import Generator, Discriminator
-        self.generator = Generator(num_class, LayerNorm=self.args.meta_arg, Condition=self.args.cond).to(device)
-        self.discriminator = Discriminator(num_class, LayerNorm=self.args.meta_arg, Condition=self.args.cond,
+        self.generator = Generator(num_class, LayerNorm=self.args.layer_norm, Condition=self.args.cond).to(device)
+        self.discriminator = Discriminator(num_class, LayerNorm=self.args.layer_norm, Condition=self.args.cond,
                                            FeatureExtraction=self.args.feature_extra).to(device)
         self.fake_targets = torch.tensor([0] * args.batch, dtype=torch.float, device=device).view(-1, 1)
         self.real_targets = torch.tensor([1] * args.batch, dtype=torch.float, device=device).view(-1, 1)
@@ -124,20 +134,19 @@ class AbstractTrainer(object):
         }
 
         torch.save(checkpoint, f"{log_dir}{self.id_string}")
-        torch.save(checkpoint, f"{log_dir}{self.id_string}_{self.eps}")
+        # torch.save(checkpoint, f"{log_dir}{self.id_string}_{self.eps}")
 
 
 class twin(AbstractTrainer):
     def __init__(self, args, num_samples, idx):
         super().__init__(args, idx)
         self.collections = None
+        self.counter = torch.zeros(num_class)
         self.id_string = "Twin_" + self.id_string
-        self.num_samples = num_samples
         self.cache = []
         self.share_cache = None
-        self.A = torch.zeros(args.N).fill_(1 / (args.N - 1)) if args.N > 1 else None
-        if self.A is not None:
-            self.A[idx] = 0
+        self.state_g = None
+        self.decay = 0.5
         self.load_checkpoint()
 
     def train(self, t):
@@ -145,27 +154,33 @@ class twin(AbstractTrainer):
         self.share_cache = None
         super().train()
 
-    def choose_neighbors(self):
-        if self.eps % int((self.num_samples * self.args.m) / self.args.batch) == 0 and self.eps != 0 and self.A is not None:
-            num_choose = max(int(math.log(self.args.N, 2)), 1)
-            chosen = list(WeightedRandomSampler(self.A, num_choose, replacement=False))
-            if chosen.count(self.idx) > 0:
-                chosen.remove(self.idx)
-            return chosen
-        return []
+    def choose_neighbors(self, t):
+        if args.N == 1:
+            return []
+        num_choose = max(int(math.log2(self.args.N)), 1)
+        rd = random.random()
+        if rd > self.decay:
+            chosen = torch.topk(A[self.idx][:], k=num_choose)[1]
+        else:
+            _clients = [i for i in range(self.args.N)]
+            _clients.remove(self.idx)
+            chosen = np.random.choice(_clients, size=num_choose, replace=False)
+        self.chosen = chosen
+        self.decay -= 0.001
+        return chosen
 
     def share_data(self):
-        if self.share_cache is not None:
-            return self.share_cache
 
         if self.args.shareway == "kd":
-            z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
-            x = self.generator(z)
-            y, kn = self.discriminator(x, True)
-            self.share_cache = (z, x, kn, y)
-
-        elif self.args.shareway == "idea":
-            pass
+            self.discriminator.eval()
+            self.generator.eval()
+            # 拿出自己最拿手的项目
+            task = list(WeightedRandomSampler(self.counter / self.counter.sum(), 1, replacement=False))
+            l = torch.tensor(task*5).to(device)
+            z = torch.randn((l.shape[0], 100)).to(device)
+            x = self.generator(z, l)
+            y = SerializationTool.serialize_model(self.discriminator)
+            self.share_cache = (z, l, x, y)
 
         elif self.args.shareway == "fl":
             pass
@@ -173,10 +188,13 @@ class twin(AbstractTrainer):
         return self.share_cache
 
     def inner_loop(self, g, d, task, opti):
-        z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
-        l = torch.tensor([task] * self.args.batch).to(device)
+        z = torch.randn((5, 100)).to(device)
+        l = torch.tensor(task).to(device)
         x_g = g(z, l)
-        loss = self.loss(d(x_g, l), self.real_targets)
+        y_g = d(x_g, l)
+        # loss = -torch.mean(y_g)
+        loss = -torch.mean(torch.sigmoid(y_g).log())
+        opti.zero_grad()
         loss.backward()
         opti.step()
         return loss.item()
@@ -184,28 +202,74 @@ class twin(AbstractTrainer):
     def meta_training_loop(self):
         self.generator.train()
         self.discriminator.eval()
-        # self.meta_g.load_state_dict(self.generator.state_dict())
+
         g_loss = 0
-        for t in self.collections:
-            g_loss += self.inner_loop(self.generator, self.discriminator, t, self.opti_g)
-        logger.info(f"EPOCHS:{self.eps}; {self.id_string}_Loss: {g_loss/len(self.collections)}")
-        # writer.add_scalar(f"{self.id_string} G Loss", g_loss, self.eps)
-        # self.generator.point_grad_to(self.meta_g)
-        # self.opti_g.step()
+        for _ in range(self.args.meta_epochs):
+            meta_g = self.generator.clone()
+            meta_opti_g = get_optimizer(meta_g, self.state_g)
+            # self.collections = np.random.choice(self.num_samples, self.args.batch, replace=False)
+            np.random.shuffle(self.collections)
+            for i in range(self.args.meta_epochs):
+                g_loss += self.inner_loop(meta_g, self.discriminator, np.repeat(self.collections[i], 5), meta_opti_g)
+            self.state_g = meta_opti_g.state_dict()
+            self.generator.point_grad_to(meta_g)
+            self.opti_g.step()
+        self.counter[self.collections] += 1 # 记录学了什么
+
+        # logger.info(
+        #     f"EPOCHS:{self.eps}; {self.id_string}_Loss: {g_loss / (len(self.collections) * self.args.meta_epochs)}")
         return g_loss
 
     def fine_tuning(self):
-        zs = []
-        xs = []
-        fs = []
-        ys = []
-        while len(self.cache) > 0:
-            kd = self.cache.pop()
-            zs.append(kd[0])
-            xs.append(kd[1])
-            fs.append(kd[2])
-            ys.append(kd[3])
-        weight = torch.zeros(len(zs))
+        if len(self.cache) == 0:
+            return
+        try:
+            global A
+            self.generator.train()
+            self.discriminator.eval()
+            chs = []
+            for ch, kd in self.cache:
+                _z, l, _x, d = kd[0].clone().detach(), kd[1].clone().detach(), kd[2].clone().detach(), kd[3]
+                _D = self.discriminator.clone()
+                SerializationTool.deserialize_model(_D, d)
+                _D.eval()
+                sim = []
+
+                # fine tuning
+                meta_g = self.generator.clone()
+                meta_opti_g = get_optimizer(meta_g, self.state_g)
+                for i in range(self.args.meta_epochs):
+                    z = torch.randn(_z.size()).to(device)
+                    x = meta_g(z, l)
+                    _y, _f = _D(_x, l, True)
+                    y, f = _D(x, l, True)
+                    Loss_mse = torch.mean(F.mse_loss(x, _x, reduction="none").view(x.shape[0], -1).sum(dim=-1) /
+                                          F.mse_loss(z, _z, reduction="none").view(x.shape[0], -1).sum(dim=-1))
+
+                    Loss_wd = F.l1_loss(f, _f, reduction="mean")
+                    # Loss_adv = -torch.mean(y)
+                    Loss_adv = -torch.mean(torch.sigmoid(y).log())
+
+                    loss = Loss_adv + 0.5 * Loss_wd + 0.5 * Loss_mse
+
+                    meta_opti_g.zero_grad()
+                    loss.backward()
+                    meta_opti_g.step()
+                    sim.append(torch.sigmoid(torch.mean(y - _y) ** -1).cpu().item())
+
+                self.generator.point_grad_to(meta_g)
+                self.opti_g.step()
+
+                A[self.idx][ch] += (sum(sim) / len(sim))
+                # 继续记录学了什么
+                self.counter[l[0]] += 1
+                chs.append(ch)
+            # A[self.idx][:] = A[self.idx][:] / A[self.idx][:].norm()
+            logger.info(f"[{self.id_string}] recv from {chs}; Knowledge Vector: {np.array(A[self.idx][:])}")
+            self.share_cache = None
+            self.cache.clear()
+        except RuntimeError:
+            print(traceback.format_exc())
 
     def sync(self, para):
         SerializationTool.deserialize_model(self.discriminator, para[0])
@@ -221,45 +285,47 @@ class client(AbstractTrainer):
         self.id_string = "Client_" + self.id_string
         self.dataset = dataset
         self.cache = []
-        self.loader = make_infinite(DataLoader(dataset.get_dataset(), batch_size=self.args.batch, shuffle=True))
+        self.loader = DataLoader(dataset.get_dataset(), batch_size=self.args.batch // self.args.meta_epochs,
+                                 shuffle=True)
         self.is_a_epoch = False
+        self.batches = 0
         self.collections = None
+        self.meta_state = None
         self.load_checkpoint()
 
     def inner_loop(self, g, d, data, opti):
         x_r, lbl = data
         x_r = x_r.to(device)
         lbl = lbl.to(device)
-        z = torch.tensor(np.random.normal(size=(self.args.batch, 100)), dtype=torch.float, device=device)
+        z = torch.randn((x_r.shape[0], 100)).to(device)
 
         x_g = g(z, lbl)
         pre_f, pre_r = d(x_g, lbl), d(x_r, lbl)
 
-        loss_adv = 0.5 * (self.loss(pre_r, self.real_targets) + self.loss(pre_f, self.fake_targets))
-        loss = loss_adv  # + loss_kl * 0.001
+        # loss_adv = -torch.mean(pre_r) + torch.mean(pre_f)
+        loss_adv = self.loss(pre_f, torch.zeros(pre_f.shape[0]).view(-1, 1).to(device)) + self.loss(pre_r, torch.ones(
+            pre_r.shape[0]).view(-1, 1).to(device))
+        loss = loss_adv
         opti.zero_grad()
         loss.backward()
         opti.step()
-        return loss.item()
+        return torch.mean(pre_r).item(), torch.mean(pre_f).item()
 
     def validate_run(self):
-        x_t = self.dataset.get_random_test_task(100)
-        for d, l in DataLoader(x_t, batch_size=100):
-            x_t = d
-        z = torch.tensor(np.random.normal(size=(100, 100)), dtype=torch.float, device=device)
+        l = torch.arange(num_class).view(-1, 1).expand(num_class, 10).reshape(num_class * 10).to(device)
+        z = torch.randn((num_class * 10, 100)).to(device)
         self.generator.eval()
         self.discriminator.eval()
-        x_g = self.generator(z).cpu()
-        fid = calcu_fid(x_t, x_g)
-        torchvision.utils.save_image(x_t[np.random.choice(range(len(x_t)), 25, replace=False)],
-                                     f"{log_dir}ground_truth.png",
-                                     nrow=5)
-        torchvision.utils.save_image(x_g[np.random.choice(range(len(x_g)), 25, replace=False)],
-                                     f"{log_dir}{self.id_string}.png",
-                                     nrow=5)
-        logger.info(f"EPOCHS: {self.eps}; {self.id_string} FID: {fid}; "
-                    f"Real Predition: {self.discriminator(x_t.to(device)).mean(dim=0).cpu().item()}; "
-                    f"Fake Predition: {self.discriminator(x_g.to(device)).mean(dim=0).cpu().item()}")
+        x_g = self.generator(z, l).cpu()
+
+        torchvision.utils.save_image(x_g, f"{log_dir}{self.id_string}.png", nrow=10)
+
+        test_data = DataLoader(self.dataset.get_random_test_task(100), batch_size=100)
+        for x_r, l in test_data:
+            z = torch.randn((100, 100)).to(device)
+            x_g = self.generator(z, l.to(device))
+            fid = calcu_fid(x_r, x_g)
+            logger.info(f"EPOCHS:{self.eps}; {self.id_string}; FID:{fid}")
 
     def train(self, t):
         self.eps = t
@@ -270,23 +336,34 @@ class client(AbstractTrainer):
         self.discriminator.train()
 
         d_loss = []
-        tasks = self.dataset.get_random_tasks(self.args.num_tasks)
-        grads = []
-        for t in tasks:
-            meta_g = self.discriminator.clone()
-            opti_d = get_optimizer(meta_g, self.opti_d.state_dict())
-            minibatch = DataLoader(self.dataset.get_one_task(t, self.args.batch), batch_size=(self.args.batch // self.args.meta_epochs))
-            for x, l in minibatch:
-                loss = self.inner_loop(self.generator, meta_g, (x, l), opti_d)
-                d_loss.append(loss)
-            self.discriminator.point_grad_to(meta_g)
-            self.opti_d.step()
-            # grads.append(SerializationTool.serialize_model(meta_g))
-        # grads = SerializationTool.serialize_model(self.discriminator) - torch.stack(grads).mean(dim=0).view(-1)
-        # SerializationTool.deserialize_model(self.discriminator, grads, position="grad")
-        # self.opti_d.step()
+        g_loss = []
+        tasks = self.dataset.get_random_tasks(self.args.num_tasks) # 这一轮学了什么
+        # for i, data in enumerate(self.loader):
+        #     if i == self.args.meta_epochs:
+        #         break
+        #     self.batches += 1
+        #     loss = self.inner_loop(self.generator, self.discriminator, data, self.opti_d)
+        #     d_loss.append(loss[0])
+        #     g_loss.append(loss[1])
+
+        for _ in range(self.args.meta_epochs):
+            tasks = self.dataset.get_random_tasks(self.args.num_tasks)
+            meta_d = self.discriminator.clone()
+            meta_opti_d = get_optimizer(meta_d, self.meta_state)
+            # 专精这一项
+            for i in range(self.args.meta_epochs):
+                samples = iter(DataLoader(self.dataset.get_n_task(tasks, 5), batch_size=5, shuffle=True))
+                loss = self.inner_loop(self.generator,  meta_d, next(samples), meta_opti_d)
+                if i == self.args.meta_epochs - 1:
+                    d_loss.append(loss[0])
+                    g_loss.append(loss[1])
+            self.discriminator.point_grad_to(meta_d) # 计算梯度
+            self.meta_state = meta_opti_d.state_dict()
+            self.opti_d.step() # 更新参数
         d_loss = np.array(d_loss).mean()
-        logger.info(f"EPOCHS:{self.eps}; {self.id_string}_Loss: {d_loss}")
+        g_loss = np.array(g_loss).mean()
+        if self.eps % 10 == 0:
+            logger.info(f"EPOCHS: [{self.eps}/{self.args.T}]; {self.id_string}; Loss D: {d_loss}; Loss G: {g_loss}")
         self.collections = tasks
         return d_loss
 
@@ -298,47 +375,81 @@ class client(AbstractTrainer):
 
 
 def main_loop():
+    global A
+    A = torch.zeros((args.N, args.N), requires_grad=False)  # SimilarityMatrix
+    # A = torch.zeros((args.N, num_class), requires_grad=False)
+
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.N)
     # read the dataset
-    datasets = EMNIST("data", args.N, dataset=args.dataset)
+    datasets = EMNIST("data", args.N, iid=not args.noniid, dataset=args.dataset)
     # initialized the clients and twins
     clients = [client(dataset, args, i) for i, dataset in enumerate(datasets)]
-    twins = [twin(args, clients[i].dataset.num_samples, i) for i in range(args.N)]
-    pkl.dump(datasets.datasets_index, open(f'{log_dir}data_distribution.pkl', 'wb'))
+    twins = [twin(args, datasets.datasets_index[i], i) for i in range(args.N)]
+
+    counter = []
+    for target in datasets.datasets_index:
+        count = torch.zeros(num_class)
+        for c in range(num_class):
+            count[c] += target.count(c)
+        counter.append(count / count.sum())
+    pkl.dump(counter, open(f'{log_dir}data_distribution.pkl', 'wb'))
 
     def train_step(trainer, t):
         futures = [executor.submit(trainer[i].train, t) for i in range(args.N)]
         concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
 
+    for i in range(args.N):
+        for j in range(args.N):
+            if i != j:
+                A[i][j] = F.kl_div(torch.log_softmax(counter[i], dim=-1), torch.softmax(counter[j], dim=-1)) ** -1
+        norms = A[i][:] / A[i][:].norm()
+        A[i][:] = torch.softmax(norms, dim=-1)
+        A[i][i] = 0
 
-    def share():
+    def share(t):
+        chosens = []
         for i in range(args.N):
-            chosen = twins[i].choose_neighbors()
+            chosen = twins[i].choose_neighbors(t)
+            chosens.append(chosen)
             for ch in chosen:
-                twins[ch].cache.append(twins[i].share_data())
-
-        futures = [executor.submit(twins[i].fine_tuning,) for i in range(args.N)]
+                if ch == i:
+                    continue
+                twins[ch].cache.append((i, twins[i].share_data()))
+            clients[i].is_a_epoch = False
+            twins[i].share_cache = None
+        futures = [executor.submit(twins[i].fine_tuning) for i in range(args.N)]
         concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
 
     def sync_para(srcs, dests):
         for src, dest in zip(srcs, dests):
-            src.sync(dest.state_dict())
+            dest.sync(src.state_dict())
 
-    def checkpoint_step():
+    def checkpoint_step(t):
         for i in range(args.N):
-            twins[i].checkpoint_step()
             clients[i].checkpoint_step()
             clients[i].validate_run()
+
+        # Convert matrix A to a numpy array
+        A_np = np.array(A)
+        # Create heatmap plot
+        plt.imshow(A_np, cmap='hot', interpolation='nearest')
+        plt.colorbar()  # add colorbar
+        plt.xlabel('Client Index')  # add x-axis label
+        plt.ylabel('Client Index')  # add y-axis label
+        plt.title(f"Heatmap of Similarity Matrix")  # add title
+        # Save plot to log folder
+        plt.savefig(f"{log_dir}heatmap_{t}.png")
+        plt.close()
 
     for t in tqdm(range(clients[0].eps, args.T + 1), leave=False):
         train_step(clients, t)
         sync_para(clients, twins)
         train_step(twins, t)
+        if t % args.S == 0 and t != 0:
+            share(t)
         sync_para(twins, clients)
-        share()
         if t % args.check_every == 0:
-            checkpoint_step()
-
+            checkpoint_step(t)
 
 if __name__ == "__main__":
     main_loop()

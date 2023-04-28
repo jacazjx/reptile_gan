@@ -6,16 +6,15 @@ import torchvision
 from PIL import Image
 from torch.utils import data
 from torchvision import transforms
-
 from utils import list_dir, list_files
-
+from io import BytesIO
+from PIL import Image
 
 def read_image(path, size=None):
-    img = Image.open(path, mode='r').convert('L')
+    imgarray = Image.open(path, mode="r").convert("L")
     if size is not None:
         img = img.resize(size)
     return img
-
 
 class ImageCache(object):
     def __init__(self):
@@ -110,9 +109,16 @@ class MetaFIGRFolder(AbstractMetaFIGR):
         '''
         :param root: folder containing alphabets for background and evaluation set
         '''
+        curPath = os.path.abspath(os.path.dirname(__file__))
+        rootPath = curPath[:curPath.find("reptile_gan\\") + len("reptile_gan\\")]
+        root = rootPath + root
         self.root = root
         self.alphabets = list_dir(root)
         self._characters = {}
+        transform_image = transforms.Compose([
+            transforms.ToTensor(),
+            # transforms.Normalize(0.5, 0.5),
+        ])
         for alphabet in self.alphabets:
             full_character = os.path.join(root, alphabet)
             character_idx = len(self._characters)
@@ -146,11 +152,13 @@ def split_omniglot(meta_omniglot, validation=0.1):
 def transform_label(paths):
     return paths['base_idx']
 
+
+
 if __name__ == '__main__':
-    # figrdataset = MetaFIGRFolder('data/FIGR-8/Data', )
+
     transform_image = transforms.Compose([transforms.ToTensor()])
     transform_label = transform_label
-    omniglot = MetaFIGRFolder('data/FIGR-8/Data', size=(28, 28), cache=ImageCache(),
+    omniglot = MetaFIGRFolder('data/FIGR-8/Data', size=(32, 32), cache=ImageCache(),
                                   transform_image=transform_image,
                                   transform_label=transform_label)
 

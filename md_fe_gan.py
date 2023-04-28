@@ -14,7 +14,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from datasets.EMNIST import EMNIST
 from logger import Logger
-from utils import SerializationTool, make_infinite
+from utils import SerializationTool, make_infinite, calcu_fid
 from dismeta import AbstractTrainer, num_class, args, logger, id_string, log_dir, device
 Tensor = torch.cuda.FloatTensor
 
@@ -198,19 +198,24 @@ class FLClient(AbstractTrainer):
         return loss_d.item(), loss_g.item(), grad_d.item(), grad_g.item()
 
     def validate_run(self):
-        real_img = make_infinite(DataLoader(self.dataset.get_random_test_task(100), batch_size=100, shuffle=True))
-        x_r, l_r = next(real_img)
-        z = torch.randn((100, 100)).to(device)
+
+        l_r = torch.arange(num_class).view(-1, 1).expand(num_class, 10).reshape(num_class * 10).to(device)
+        z = torch.randn((num_class * 10, 100)).to(device)
         self.generator.eval()
         self.discriminator.eval()
-        x_g = self.generator(z, l_r.to(device)).cpu()
-        # fid = calcu_fid(x_r, x_g)
-        torchvision.utils.save_image(x_r[np.random.choice(range(len(x_r)), 25, replace=False)],
-                                     f"{log_dir}ground_truth.png",
-                                     nrow=5, normalize=True)
-        torchvision.utils.save_image(x_g[np.random.choice(range(len(x_g)), 25, replace=False)],
-                                     f"{log_dir}{self.id_string}.png",
-                                     nrow=5, normalize=True)
+        x_g = self.generator(z, l_r).cpu()
+
+
+        torchvision.utils.save_image(x_g,
+                                    f"{log_dir}{self.id_string}.png",
+                                    nrow=10, normalize=True)
+
+        test_data = DataLoader(self.dataset.get_random_test_task(100), batch_size=100)
+        for x_r, l in test_data:
+            z = torch.randn((100, 100)).to(device)
+            x_g = self.generator(z, l.to(device))
+            fid = calcu_fid(x_r, x_g)
+            logger.info(f"EPOCHS:{self.eps}; {self.id_string}; FID:{fid}")
         # logger.info(f"EPOCHS: [{self.eps}/{self.args.T}]; {self.id_string}; "
         #             f"Real Predition: {self.discriminator(x_r.type(Tensor), l_r.to(device)).mean(dim=0).cpu().item()}; "
         #             f"Fake Predition: {self.discriminator(x_g.type(Tensor), l_r.to(device)).mean(dim=0).cpu().item()}")
@@ -249,15 +254,17 @@ import pickle as pkl
 
 all_groups = []
 
+
 def init_groups(size, cls_freq_wrk):
     """
-	Initialization of all distributed groups for the whole training process. We do this in advance so as not to hurt the performance of training.
-	The server initializes the group and send it to all workers so that everybody can agree on the working group at some round.
-	Args
-		size		The total number of machines in the current setup
-		cls_freq_wrk	The frequency of samples of each class at each worker. This is used when the "sample" option is chosen. Otherwise, random sampling is applied and this parameter is not used.
+    Initialization of all distributed groups for the whole training process. We do this in advance so as not to hurt the performance of training.
+    The server initializes the group and send it to all workers so that everybody can agree on the working group at some round.
+    Args
+        size		The total number of machines in the current setup
+        cls_freq_wrk	The frequency of samples of each class at each worker. This is used when the "sample" option is chosen. Otherwise, random sampling is applied and this parameter is not used.
     """
     global all_groups
+    all_wrk = cls_freq_wrk.mean(axis=0).flatten()
     done = False
     gp_size = max(1, int(0.2 * (size)))
     # If opt.sample is set, use the smart sampling, i.e., based on frequency of samples of each class at each worker. Otherwise, use random sampling
@@ -286,6 +293,8 @@ def init_groups(size, cls_freq_wrk):
             done_q = False
             count = 0
             while not done_q:
+                while cls_q[cls].qsize() == 0:
+                    cls = np.random.choice(num_class, 1)[0]
                 wrkr = cls_q[cls].get()
                 assert wrk_cls[wrkr][cls]
                 if not visited[wrkr] and wrk_cls[wrkr][cls]:
@@ -303,7 +312,9 @@ def init_groups(size, cls_freq_wrk):
             done = True
     return all_groups
 
+
 import concurrent.futures
+
 
 def main_loop():
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.N)
@@ -324,7 +335,7 @@ def main_loop():
         for target in datasets_targets:
             cls_freq_wrk = torch.zeros(num_class)
             for c in range(num_class):
-                cls_freq_wrk[c] += (target == c).sum()
+                cls_freq_wrk[c] += target.count(c)
             y += cls_freq_wrk
             cls_freq_wrks.append(cls_freq_wrk)
 
@@ -343,14 +354,12 @@ def main_loop():
             futures = [executor.submit(clients[i].train, t) for i in range(args.N)]
         concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
 
-
-
     def aggregate(t, init=False):
         if args.model == 'fegan':
             if init:
                 chosen_clients = [j for j in range(args.N)]
             else:
-                chosen_clients = all_groups[t-1]
+                chosen_clients = all_groups[t - 1]
             weights = []
             for j in chosen_clients:
                 server.cache.append(clients[j].state_dict())
@@ -369,6 +378,17 @@ def main_loop():
             for j in range(args.N):
                 clients[j].load_fake(pkg[j % k], pkg[(j + 1) % k])
 
+    def evaluate(t):
+        fids = []
+        for i in range(args.N):
+            test_data = DataLoader(clients[i].dataset.get_random_test_task(100), batch_size=100)
+            for x_r, l in test_data:
+                z = torch.randn((100, 100)).to(device)
+                x_g = server.generator(z, l.to(device))
+                fid = calcu_fid(x_r, x_g)
+
+                fids.append(fid)
+        logger.info(f"EPOCHS:{t}; FIDs:{fids}")
 
     def share_para():
         for i in range(args.N):
@@ -401,6 +421,7 @@ def main_loop():
         for t in range(start, args.T+1):
             if t % args.check_every == 0:
                 checkpoint_step()
+                evaluate(t)
             aggregate(t, True if t == 0 else False)
             client_train_step(t)
             share_para()

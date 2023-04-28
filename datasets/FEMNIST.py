@@ -3,15 +3,20 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
+import torchvision
+from PIL import Image
 from torchvision import datasets, transforms
 from torch.utils import data
-from PIL import Image
+from utils import normalize_data, unnormalize_data, get_mApping
 np.random.seed(2023)
 
 
 class FEMNIST:
     def __init__(self, root, num_clients=10, iid="iid"):
-        self.path = "./" + root + f"/FEMNIST/{iid}/"
+        curPath = os.path.abspath(os.path.dirname(__file__))
+        rootPath = curPath[:curPath.find("reptile_gan\\") + len("reptile_gan\\")]
+        self.path = rootPath + root + f"/FEMNIST/{iid}/"
         self.num_clients = num_clients
         self.client = []
         self.num_samples = None
@@ -54,34 +59,36 @@ class SingleDataset:
         self.samples = np.array(train['x'])
         self.labels = np.array(train['y'])
         self.num_samples = num_samples
-        self.test = test
+        self.test_samples = np.array(test["x"])
+        self.test_labels = np.array(test["y"])
+
+    def get_random_tasks(self, num_tasks):
+        class_indices = np.random.choice(np.unique(self.labels), size=num_tasks, replace=False)
+        return class_indices
+
+    def get_dataset(self):
+        return FewShot(torch.from_numpy(self.samples), torch.from_numpy(self.labels))
 
     def get_random_test_task(self, n=5):
-        idx = np.random.choice(range(self.test['x'].shape[0]), n, replace=False)
-        return FewShot(self.test['x'][idx], self.test['y'][idx])
+        idx = np.random.choice(range(len(self.test_samples)), n, replace=True)
+        return FewShot(torch.from_numpy(self.test_samples[idx]), torch.from_numpy(self.test_labels[idx]))
 
     def get_random_train_task(self, n=5):
         idx = np.random.choice(range(self.samples.shape[0]), n, replace=False)
-        return FewShot(self.samples[idx], self.labels[idx])
+        return FewShot(torch.from_numpy(self.samples[idx]), torch.from_numpy(self.labels[idx]))
 
-    def get_random_task(self, n_way, k_shot):
-        class_indices = np.random.choice(np.unique(self.labels), size=n_way, replace=False)
+    def get_random_task(self, way, k_shot):
         task_data, task_targets = [], []
 
-        for class_idx in class_indices:
-            # Select samples for this class
-            class_data = self.samples[self.labels == class_idx]
-            indices = np.random.choice(len(class_data), size=k_shot, replace=True)
-            task_data.append(class_data[indices])
-            task_targets.extend([class_idx] * k_shot)
+        # Select samples for this class
+        class_data = self.samples[self.labels == way]
+        indices = np.random.choice(len(class_data), size=k_shot, replace=True)
+        task_data.append(class_data[indices])
+        task_targets.extend([way] * k_shot)
 
         # Combine data and targets for this task
         task_data = np.concatenate(task_data, axis=0)
         task_targets = np.asarray(task_targets)
-
-        # Convert data and targets to tensors
-        task_data = torch.from_numpy(task_data).float()
-        task_targets = torch.from_numpy(task_targets).long()
 
         return FewShot(task_data, task_targets)
 
@@ -90,21 +97,22 @@ class FewShot(data.Dataset):
     def __init__(self, samples, targets):
         self.targets = targets
         self.samples = samples
-        self.transform = transforms.Compose([transforms.Resize(32),
+        self.transform = transforms.Compose([transforms.Resize(64),
                                              transforms.ToTensor(),
-                                             transforms.Normalize([0.5], [0.5])])
-
+                                             transforms.Normalize(0.5, 0.5),
+                                             ])
+        self.resize = torchvision.transforms.Resize([64, 64])
     def __len__(self):
         return len(self.targets)
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
         target = self.targets[idx]
-
-        image = Image.fromarray(sample.view(28, 28).numpy(), mode='L')
-
+        image = Image.fromarray(sample.reshape(28, 28) * 255.)
+        # image = self.resize(sample.reshape(1, 1, 28, 28))
         image = self.transform(image)
-        return image, target
+
+        return image, torch.tensor(target)
 
 
 if __name__ == '__main__':
@@ -112,6 +120,8 @@ if __name__ == '__main__':
     user_1 = dataset[0]
 
     task = user_1.get_random_task(10, 10)
-    for i in torch.utils.data.DataLoader(task, batch_size=10):
-        plt.show(i)
+    from torchvision.transforms import ToPILImage
+    show = ToPILImage()
+    for img, _ in torch.utils.data.DataLoader(task, batch_size=10):
+        show(img).show()
 

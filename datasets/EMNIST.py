@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import PIL
@@ -8,10 +9,10 @@ from torch.utils import data
 from PIL import Image
 from datasets.MNIST import MNISTTasks
 from torchvision import datasets, transforms
-from fedlab.utils.dataset import FMNISTPartitioner
+from fedlab.utils.dataset import BasicPartitioner
 import pickle
 
-class Partitioner(FMNISTPartitioner):
+class Partitioner(BasicPartitioner):
     num_features = 784
 
     def __init__(self, targets, num_clients, dataset="emnist", partition: str = 'iid',
@@ -19,20 +20,31 @@ class Partitioner(FMNISTPartitioner):
                  major_classes_num: int = None,
                  verbose: bool = True,
                  seed: Any = None):
-        super().__init__(targets, num_clients, partition, dir_alpha, major_classes_num, verbose, seed)
-
         if dataset == "emnist":
             self.num_classes = 62
         elif dataset == "mnist":
             self.num_classes = 10
+        super(Partitioner, self).__init__(targets=targets, num_clients=num_clients,
+                                                partition=partition,
+                                                dir_alpha=dir_alpha,
+                                                major_classes_num=major_classes_num,
+                                                verbose=verbose,
+                                                seed=seed)
+
+
+
 
 
 class EMNIST(object):
     max_clients = 200
     def __init__(self, root, num_clients, iid=True, dataset="emnist"):
+        curPath = os.path.abspath(os.path.dirname(__file__))
+        rootPath = curPath[:curPath.find("reptile_gan\\") + len("reptile_gan\\")]
         if dataset == "emnist":
             self.dataset = datasets.EMNIST(root, split='byclass', train=True, download=True)
+            self.max_clients = 2000
         elif dataset == "mnist":
+            max_clients = 400
             self.dataset = datasets.MNIST(root, train=True, download=True)
         self.split_train_test(iid, num_clients, dataset)
 
@@ -76,7 +88,8 @@ class SingleDataset:
         return FewShot(self.samples, self.labels)
 
     def get_random_tasks(self, num_tasks):
-        class_indices = np.random.choice(np.unique(self.labels), size=num_tasks, replace=False)
+        num_class = len(np.unique(self.labels))
+        class_indices = np.random.choice(np.unique(self.labels), size=num_tasks, replace=False if num_tasks < num_class else True)
         return class_indices
 
     def get_random_test_task(self, n=5):
@@ -86,6 +99,22 @@ class SingleDataset:
     def get_random_train_task(self, n=5):
         idx = np.random.choice(range(self.samples.shape[0]), n, replace=False)
         return FewShot(self.samples[idx], self.labels[idx])
+
+    def get_n_task(self, n_way, k_shot):
+        task_data, task_targets = [], []
+
+        for way in n_way:
+            # Select samples for this class
+            class_data = self.samples[self.labels == way]
+            indices = np.random.choice(len(class_data), size=k_shot, replace=True)
+            task_data.append(class_data[indices])
+            task_targets.extend([way] * k_shot)
+
+        # Combine data and targets for this task
+        task_data = np.concatenate(task_data, axis=0)
+        task_targets = np.asarray(task_targets)
+
+        return FewShot(task_data, task_targets)
 
     def get_one_task(self, way, k_shot):
         task_data, task_targets = [], []

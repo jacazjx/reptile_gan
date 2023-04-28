@@ -101,10 +101,11 @@ class Generator(ReptileModel):
     def __init__(self, num_classes, latent_dim=100, img_channels=1, hidden_dim=16, LayerNorm=False, Condition=False):
         super(ReptileModel, self).__init__()
         self.num_classes = num_classes
-        self.condition = Condition
+        self.Condition = Condition
         self.embedding = nn.Embedding(num_classes, latent_dim) if Condition else None
         self.noise_dim = latent_dim
         self.img_channels = img_channels
+        self.LayerNorm = LayerNorm
         self.hidden_dim = hidden_dim
         self.generator = nn.Sequential(
             nn.Linear(self.noise_dim, self.hidden_dim * 4 * 4 * 4, bias=False),
@@ -113,24 +114,28 @@ class Generator(ReptileModel):
             Resize((self.hidden_dim * 4, 4, 4)),
             nn.ConvTranspose2d(self.hidden_dim * 4, self.hidden_dim * 2, kernel_size=4, stride=2, padding=1,
                                bias=False),
-            nn.GroupNorm(num_groups=self.hidden_dim // 4,
+            nn.GroupNorm(num_groups=self.hidden_dim * 2,
                          num_channels=self.hidden_dim * 2) if LayerNorm else nn.BatchNorm2d(self.hidden_dim * 2),
             nn.LeakyReLU(0.2, inplace=True),
             nn.ConvTranspose2d(self.hidden_dim * 2, self.hidden_dim, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.GroupNorm(num_groups=self.hidden_dim // 8,
+            nn.GroupNorm(num_groups=self.hidden_dim,
                          num_channels=self.hidden_dim) if LayerNorm else nn.BatchNorm2d(self.hidden_dim),
             nn.LeakyReLU(0.2, inplace=True),
+        )
+        
+        self.backbone = nn.Sequential(
             nn.ConvTranspose2d(self.hidden_dim, self.img_channels, kernel_size=4, stride=2, padding=1, bias=False),
             nn.Tanh()
         )
+        
 
     def forward(self, z, labels=None):
-        if self.condition:
+        if self.Condition:
             embedding = self.embedding(labels)
             x = z + embedding
         else:
             x = z
-        return self.generator(x)
+        return self.backbone(self.generator(x))
 
     def clone(self):
         clone = Generator(self.num_classes, img_channels=self.img_channels, hidden_dim=self.hidden_dim,
@@ -150,10 +155,9 @@ class Discriminator(ReptileModel):
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
         self.LayerNorm = LayerNorm
-        self.FeatureExtraction = FeatureExtraction
         self.Condition = Condition
         self.embedding = nn.Embedding(num_classes, 32 ** 2) if Condition else None
-        self.feature_extraction = nn.Flatten() if FeatureExtraction else None
+        self.feature_extraction = nn.Flatten()
         self.discriminator_front = nn.Sequential(
             nn.Conv2d(self.img_channels, self.hidden_dim, kernel_size=4, stride=2, padding=1, bias=False),
             nn.LayerNorm([self.hidden_dim, 16, 16]) if LayerNorm else nn.BatchNorm2d(self.hidden_dim),
@@ -164,7 +168,6 @@ class Discriminator(ReptileModel):
             nn.Conv2d(self.hidden_dim * 2, self.hidden_dim * 4, kernel_size=4, stride=2, padding=1, bias=False),
             nn.LayerNorm([self.hidden_dim * 4, 4, 4]) if LayerNorm else nn.BatchNorm2d(self.hidden_dim * 4),
             nn.LeakyReLU(0.2, inplace=True),
-
         )
 
         self.discriminator_backbone = nn.Sequential(
@@ -172,7 +175,7 @@ class Discriminator(ReptileModel):
             nn.Flatten()
         )
 
-    def forward(self, img, labels=None):
+    def forward(self, img, labels=None, FeatureExtractor=False):
         if self.Condition:
             embedding = self.embedding(labels).view(labels.shape[0], 1, 32, 32)
             x = img + embedding
@@ -181,12 +184,11 @@ class Discriminator(ReptileModel):
         hidden = self.discriminator_front(x)
         out = self.discriminator_backbone(hidden)
 
-        return out if self.FeatureExtraction else out, self.feature_extractor(hidden)
+        return out if not FeatureExtractor else (out, hidden.view(img.shape[0], -1))
 
     def clone(self):
         clone = Discriminator(self.num_classes, img_channels=self.img_channels, hidden_dim=self.hidden_dim,
-                              LayerNorm=self.LayerNorm, Condition=self.Condition,
-                              FeatureExtraction=self.FeatureExtraction).cuda()
+                              LayerNorm=self.LayerNorm, Condition=self.Condition).cuda()
         clone.load_state_dict(self.state_dict())
         if self.is_cuda():
             clone.cuda()
