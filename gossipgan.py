@@ -1,4 +1,6 @@
 import argparse
+
+import concurrent.futures
 import math
 import os
 
@@ -127,6 +129,7 @@ class Client(AbstractTrainer):
 import pickle as pkl
 
 def main_loop():
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=args.N)
     # read the dataset
     datasets = EMNIST("data", args.N, True, dataset=args.dataset)
     # initialized the clients and twins
@@ -134,8 +137,8 @@ def main_loop():
     pkl.dump(datasets.datasets_index, open(f'{log_dir}data_distribution.pkl', 'wb'))
 
     def client_train_step(t):
-        for i in range(args.N):
-            clients[i].train(t)
+        futures = [executor.submit(clients[i].train, t) for i in range(args.N)]
+        concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
 
     def share_para():
         num_choose = max(0, int(math.log2(args.N)))
