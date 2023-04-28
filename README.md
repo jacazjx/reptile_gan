@@ -59,6 +59,8 @@ for `meta-batch=1`.
 <img src="https://github.com/gabrielhuang/reptile-pytorch/raw/master/plots/omniglot_train.png" width="400">
 <img src="https://github.com/gabrielhuang/reptile-pytorch/raw/master/plots/omniglot_val.png" width="400">
 
+python gossipgan.py --model standalone --dataset mnist -N 1 --meta_epochs 200
+
 ## MNIST
 
 FeGAN

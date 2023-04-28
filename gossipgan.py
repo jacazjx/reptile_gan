@@ -14,98 +14,15 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from utils import SerializationTool, make_infinite, wassertein_loss, l2_regularization, calcu_fid, \
     calc_gradient_penalty, kl_loss
-from logger import Logger
-
+from dismeta import AbstractTrainer, num_class, args, logger, id_string, log_dir, device
 Tensor = torch.cuda.FloatTensor
 
-# Parsing
-parser = argparse.ArgumentParser('Train reptile on omniglot')
 
-# Mode
-parser.add_argument('--logdir', default="log", type=str, help='Folder to store everything/load')
-
-# - Training params
-parser.add_argument('-T', default=100000, type=int, help='num of communications')
-parser.add_argument('-N', default=1, type=int, help='num of client')
-parser.add_argument('--model', default="lsgan", type=str, choices=["lsgan", "cgan"], help='num of client')
-parser.add_argument('--dataset', default="mnist", type=str, choices=["emnist", "mnist"], help='num of client')
-parser.add_argument('--shareway', default="kd", type=str, choices=["kd", "fl", "idea"],
-                    help='the method to share between clients/twins')
-parser.add_argument('--num_tasks', default=5, type=int, help='number of sample tasks')
-parser.add_argument('--meta_epochs', default=20, type=int, help='number of meta iterations')
-parser.add_argument('--test_iterations', default=50, type=int, help='number of base iterations')
-parser.add_argument('--batch', default=20, type=int, help='minibatch size in base task')
-parser.add_argument('--meta-lr', default=1e-4, type=float, help='meta learning rate')
-parser.add_argument('--lr', default=0.0002, type=float, help='base learning rate')
-parser.add_argument('--m', default=1, type=int, help='base learning rate')
-# - General params
-parser.add_argument('--validation', default=0.1, type=float, help='Percentage of validation')
-parser.add_argument('--validate_every', default=500, type=int, help='Meta-evaluation every ... base-tasks')
-parser.add_argument('--cuda', default=0, type=int, help='Use cuda')
-parser.add_argument('--check_every', default=1000, type=int, help='Checkpoint every')
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-args = parser.parse_args()
-id_string = f"gossipgan_{args.N}+{args.model}+{args.dataset}+{args.shareway}+{args.meta_epochs}+{args.batch}"
-log_dir = f"./checkpoint/{id_string}/"
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-logger = Logger(log_dir)
+np.random.seed(2023)
+torch.manual_seed(2023)
+torch.cuda.manual_seed(2023)
 
 
-# writer = SummaryWriter("log")
-
-class AbstractTrainer(object):
-    def __init__(self, args, idx):
-        self.idx = idx
-        self.args = args
-        self.id_string = f"{idx}"
-        num_class = 62 if self.args.dataset == "emnist" else 10
-        from models import Generator, Discriminator
-        self.generator = Generator(num_class, LayerNorm=False).to(device)
-        self.discriminator = Discriminator(num_class, LayerNorm=False).to(device)
-        self.fake_targets = torch.tensor([0] * args.batch, dtype=torch.float, device=device).view(-1, 1)
-        self.real_targets = torch.tensor([1] * args.batch, dtype=torch.float, device=device).view(-1, 1)
-        self.opti_d = optim.Adam(params=self.discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
-        self.opti_g = optim.Adam(params=self.generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
-        self.loss = nn.BCEWithLogitsLoss()
-
-    def train(self, *args, **kwargs):
-        # if self.args.meta_arg:
-        self.meta_training_loop()
-        # else:
-        #     self.base_training_loop()
-
-    def meta_training_loop(self):
-        pass
-
-    def base_training_loop(self):
-        pass
-
-    def validate_run(self):
-        pass
-
-    def load_checkpoint(self):
-        if not os.path.exists(f"{log_dir}{self.id_string}"):
-            self.eps = 0
-            return
-        checkpoint = torch.load(f"{log_dir}{self.id_string}")
-        self.generator.load_state_dict(checkpoint["model"]["G"])
-        self.discriminator.load_state_dict(checkpoint["model"]["D"])
-        self.opti_g.load_state_dict(checkpoint["opti"]["G"])
-        self.opti_d.load_state_dict(checkpoint["opti"]["D"])
-        self.eps = checkpoint["eps"]
-
-    def checkpoint_step(self):
-        checkpoint = {
-            "model": {"G": self.generator.state_dict(), "D": self.discriminator.state_dict()},
-            "opti": {"G": self.opti_g.state_dict(), "D": self.opti_d.state_dict()},
-            "eps": self.eps
-        }
-
-        torch.save(checkpoint, f"{log_dir}{self.id_string}")
-        torch.save(checkpoint, f"{log_dir}{self.id_string}_{self.eps}")
 
 class Client(AbstractTrainer):
     def __init__(self, dataset, args, idx):
@@ -171,7 +88,7 @@ class Client(AbstractTrainer):
         self.eps = t
         super().train()
 
-    def meta_training_loop(self):
+    def base_training_loop(self):
         self.excu_cache()
         self.generator.train()
         self.discriminator.train()
@@ -186,8 +103,8 @@ class Client(AbstractTrainer):
             d_grad += loss[2]
             g_grad += loss[3]
         logger.info(f"EPOCHS: [{self.eps}/{self.args.T}]; [{self.id_string}]; "
-                    f"D_Loss: {d_loss / 200}; G_loss: {g_loss / 200}; "
-                    f"D_Grad: {d_grad / 200}; G_grad: {g_grad / 200}")
+                    f"D_Loss: {d_loss / self.args.meta_epochs}; G_loss: {g_loss / self.args.meta_epochs}; "
+                    f"D_Grad: {d_grad / self.args.meta_epochs}; G_grad: {g_grad / self.args.meta_epochs}")
 
     def excu_cache(self):
         if len(self.cache) > 0:
@@ -208,7 +125,6 @@ class Client(AbstractTrainer):
 
 
 import pickle as pkl
-
 
 def main_loop():
     # read the dataset

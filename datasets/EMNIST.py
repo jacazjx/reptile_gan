@@ -12,6 +12,8 @@ from torchvision import datasets, transforms
 from fedlab.utils.dataset import BasicPartitioner
 import pickle
 
+channel = 1
+
 class Partitioner(BasicPartitioner):
     num_features = 784
 
@@ -31,20 +33,17 @@ class Partitioner(BasicPartitioner):
                                                 verbose=verbose,
                                                 seed=seed)
 
-
-
-
-
 class EMNIST(object):
     max_clients = 200
     def __init__(self, root, num_clients, iid=True, dataset="emnist"):
         curPath = os.path.abspath(os.path.dirname(__file__))
         rootPath = curPath[:curPath.find("reptile_gan\\") + len("reptile_gan\\")]
+        root = rootPath + root
         if dataset == "emnist":
             self.dataset = datasets.EMNIST(root, split='byclass', train=True, download=True)
             self.max_clients = 2000
         elif dataset == "mnist":
-            max_clients = 400
+            self.max_clients = 400
             self.dataset = datasets.MNIST(root, train=True, download=True)
         self.split_train_test(iid, num_clients, dataset)
 
@@ -157,4 +156,5 @@ class FewShot(data.Dataset):
 
 
 if __name__ == "__main__":
+    data = EMNIST("data", 10, iid=True, dataset="mnist")
     pass

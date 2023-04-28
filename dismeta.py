@@ -30,9 +30,9 @@ parser.add_argument('--logdir', default="log", type=str, help='Folder to store e
 # - Training params
 parser.add_argument('-T', default=10000, type=int, help='num of communications')
 parser.add_argument('-N', default=1, type=int, help='num of client')
-parser.add_argument('--model', default="twingan", type=str, choices=["fegan", "mdgan", "gossipgan", "twingan"],
-                    help='num of client')
-parser.add_argument('--dataset', default="mnist", type=str, choices=["emnist", "mnist"], help='num of client')
+parser.add_argument('--model', default="twingan", type=str, choices=["fegan", "mdgan", "gossipgan", "twingan", "standalone"],
+                    help='algorithm')
+parser.add_argument('--dataset', default="mnist", type=str, choices=["emnist", "mnist"], help='which dataset')
 parser.add_argument('--meta', dest="meta_arg", action="store_true", default=False, help="whether use meta learning")
 parser.add_argument('--niid', dest="noniid", action="store_true", default=False, help="whether use non-iid")
 parser.add_argument('--ln', dest="layer_norm", action="store_true", default=False, help="whether use layer_norm")
