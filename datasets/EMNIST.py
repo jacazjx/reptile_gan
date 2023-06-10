@@ -43,7 +43,7 @@ class EMNIST(object):
             self.dataset = datasets.EMNIST(root, split='byclass', train=True, download=True)
             self.max_clients = 2000
         elif dataset == "mnist":
-            self.max_clients = 400
+            self.max_clients = 200
             self.dataset = datasets.MNIST(root, train=True, download=True)
         self.split_train_test(iid, num_clients, dataset)
 

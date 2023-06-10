@@ -12,6 +12,8 @@ from scipy import stats
 from torch import optim, nn
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
+
+from MMD import MMD_loss
 from datasets.EMNIST import EMNIST
 from logger import Logger
 from utils import SerializationTool, make_infinite, calcu_fid
@@ -209,13 +211,13 @@ class FLClient(AbstractTrainer):
         torchvision.utils.save_image(x_g,
                                     f"{log_dir}{self.id_string}.png",
                                     nrow=10, normalize=True)
-
+        mmd = MMD_loss().cuda()
         test_data = DataLoader(self.dataset.get_random_test_task(100), batch_size=100)
         for x_r, l in test_data:
             z = torch.randn((100, 100)).to(device)
             x_g = self.generator(z, l.to(device))
-            fid = calcu_fid(x_r, x_g)
-            logger.info(f"EPOCHS:{self.eps}; {self.id_string}; FID:{fid}")
+            x_r = x_r.to(device)
+            logger.info(f"EPOCHS:{self.eps}; {self.id_string}; MMD:{mmd(x_g.view(100, -1), x_r.view(100, -1))}")
         # logger.info(f"EPOCHS: [{self.eps}/{self.args.T}]; {self.id_string}; "
         #             f"Real Predition: {self.discriminator(x_r.type(Tensor), l_r.to(device)).mean(dim=0).cpu().item()}; "
         #             f"Fake Predition: {self.discriminator(x_g.type(Tensor), l_r.to(device)).mean(dim=0).cpu().item()}")
@@ -380,15 +382,15 @@ def main_loop():
 
     def evaluate(t):
         fids = []
+        mmd = MMD_loss().cuda()
         for i in range(args.N):
             test_data = DataLoader(clients[i].dataset.get_random_test_task(100), batch_size=100)
             for x_r, l in test_data:
                 z = torch.randn((100, 100)).to(device)
                 x_g = server.generator(z, l.to(device))
-                fid = calcu_fid(x_r, x_g)
-
-                fids.append(fid)
-        logger.info(f"EPOCHS:{t}; FIDs:{fids}")
+                x_r = x_r.to(device)
+                fids.append(mmd(x_g.view(100, -1), x_r.view(100, -1)))
+        logger.info(f"EPOCHS:{t}; MIDs:{fids}")
 
     def share_para():
         for i in range(args.N):

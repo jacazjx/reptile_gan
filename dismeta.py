@@ -30,7 +30,7 @@ parser.add_argument('--logdir', default="log", type=str, help='Folder to store e
 # - Training params
 parser.add_argument('-T', default=10000, type=int, help='num of communications')
 parser.add_argument('-N', default=1, type=int, help='num of client')
-parser.add_argument('--model', default="twingan", type=str, choices=["fegan", "mdgan", "gossipgan", "twingan", "standalone"],
+parser.add_argument('--model', default="twingan", type=str, choices=["fegan", "mdgan", "gossipgan", "twingan", "standalone", "metagan"],
                     help='algorithm')
 parser.add_argument('--dataset', default="mnist", type=str, choices=["emnist", "mnist"], help='which dataset')
 parser.add_argument('--meta', dest="meta_arg", action="store_true", default=False, help="whether use meta learning")
@@ -41,6 +41,8 @@ parser.add_argument('--feature', dest="feature_extra", action="store_true", defa
 parser.add_argument('--condition', dest="cond", action="store_true", default=False, help="whether use condition")
 parser.add_argument('--shareway', default="kd", type=str, choices=["kd", "fl", "idea"],
                     help='the method to share between clients/twins')
+parser.add_argument('--aggregation', dest="aggr", action="store_true", default=False, help="whether use condition")
+
 parser.add_argument('--num_tasks', default=5, type=int, help='number of sample tasks')
 parser.add_argument('--meta_epochs', default=20, type=int, help='number of meta iterations')
 parser.add_argument('--test_iterations', default=50, type=int, help='number of base iterations')
@@ -96,7 +98,7 @@ class AbstractTrainer(object):
                                            FeatureExtraction=self.args.feature_extra).to(device)
         self.fake_targets = torch.tensor([0] * args.batch, dtype=torch.float, device=device).view(-1, 1)
         self.real_targets = torch.tensor([1] * args.batch, dtype=torch.float, device=device).view(-1, 1)
-        self.opti_d = optim.Adam(params=self.discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
+        self.opti_d = optim.SGD(params=self.discriminator.parameters(), lr=args.lr)
         self.opti_g = optim.Adam(params=self.generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
         self.loss = nn.BCEWithLogitsLoss()
 
