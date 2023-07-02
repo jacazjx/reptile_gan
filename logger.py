@@ -11,10 +11,10 @@ class Logger:
         self.logger.setLevel(log_level)
         formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
 
-        # Create a console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        self.logger.addHandler(console_handler)
+        # # Create a console handler
+        # console_handler = logging.StreamHandler()
+        # console_handler.setFormatter(formatter)
+        # self.logger.addHandler(console_handler)
 
         # Create a file handler
         if not os.path.exists(log_dir):
